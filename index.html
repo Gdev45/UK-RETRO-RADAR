@@ -5,7 +5,8 @@
 <style>
 html,body{margin:0;height:100%;overflow:hidden;background:#000;color:#ccc;font:12px/1.3 "Courier New",monospace}
 #wrap{display:flex;flex-direction:column;width:100vw;height:100vh;height:100dvh}
-#stage{flex:1;min-height:0;position:relative;background:#000;container-type:inline-size;overflow:hidden;touch-action:none}
+#stage{flex:1;min-height:0;position:relative;background:#000;container-type:inline-size;overflow:hidden;touch-action:none;cursor:crosshair}
+#mapLayer{position:absolute;inset:0;transform-origin:0 0;will-change:transform}
 canvas{position:absolute;inset:0;width:100%;height:100%}
 #radar{image-rendering:crisp-edges;image-rendering:pixelated}
 #title{position:absolute;left:0;right:0;bottom:0;text-align:center;color:#fff;font-size:clamp(9px,1.45cqw,13px);line-height:1.25;background:#000;padding:3px 4px}
@@ -34,8 +35,9 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
 
 </head><body>
 <div id="wrap">
-<div id="stage"><canvas id="radar" width="900" height="900"></canvas><canvas id="ov" width="900" height="900"></canvas><div id="title">LOADING RADAR…</div></div>
+<div id="stage"><div id="mapLayer"><canvas id="radar" width="900" height="900"></canvas><canvas id="ov" width="900" height="900"></canvas><div id="title">LOADING RADAR…</div></div></div>
 <div id="ctl"><button id="first" title="Oldest">|◄</button><button id="prev" title="Back">◄</button><button id="play" title="Play / pause">❚❚</button><button id="next" title="Forward">►</button><button id="last" title="Latest">►|</button>
+<button id="zoomOut" title="Zoom out">−</button><button id="zoomIn" title="Zoom in">＋</button><button id="zoomReset" title="Reset zoom">100%</button>
 <input id="sl" type="range" min="0" max="0" value="0"><select id="px" title="Size of each hard-edged radar block"><option value="1" selected>Pixel 1x</option><option value="2">Pixel 2x</option><option value="3">Pixel 3x</option><option value="4">Pixel 4x</option></select><select id="spd"><option value="900">Slow</option><option value="500" selected>Normal</option><option value="250">Fast</option></select><input id="palFile" type="file" accept=".pal,.txt" hidden><button id="loadPal" title="Load custom .pal colour table">Load .pal</button><button id="resetPal" title="Reset to default colour table">Default</button><span id="st">…</span></div>
 <div id="meta"><span id="ro">Hover or touch the map for live dBZ / rain rate</span><span class="cell">Weather data by <a href="https://www.rainviewer.com" target="_blank" rel="noopener">Rain Viewer</a></span></div>
 </div>
@@ -117,7 +119,27 @@ function dbz(r,g,b,a){
 const $=id=>document.getElementById(id),rc=$('radar').getContext('2d'),ovc=$('ov'),ov=ovc.getContext('2d');
 let SW=900,SH=900,OX=0,OY=0,CW=900,CH=900,DPR=1,img,px32,gen=0,cell=1,mapX,mapY;
 let host='',mode=null,frames=[],idx=0,playing=true,timer=null,lastOk=0,fails=0;
+const MIN_ZOOM=1, MAX_ZOOM=6, clamp=(v,min,max)=>Math.min(max,Math.max(min,v));
+let viewZoom=1, viewTranslateX=0, viewTranslateY=0;
+let dragMode=null;
 const ready=()=>frames.filter(f=>f.gen===gen&&(f.data||f.canvas));
+function applyZoomTransform(){
+  mapLayer.style.transform=`translate(${viewTranslateX}px, ${viewTranslateY}px) scale(${viewZoom})`;
+}
+function zoomBy(factor,clientX,clientY){
+  const rect=stage.getBoundingClientRect();
+  const localX=(clientX-rect.left-viewTranslateX)/viewZoom;
+  const localY=(clientY-rect.top-viewTranslateY)/viewZoom;
+  const nextZoom=clamp(viewZoom*factor, MIN_ZOOM, MAX_ZOOM);
+  viewTranslateX = clientX-rect.left - localX*nextZoom;
+  viewTranslateY = clientY-rect.top - localY*nextZoom;
+  viewZoom=nextZoom;
+  applyZoomTransform();
+  $('zoomReset').textContent=`${Math.round(viewZoom*100)}%`;
+}
+function resetZoom(){
+  viewZoom=1; viewTranslateX=0; viewTranslateY=0; applyZoomTransform(); $('zoomReset').textContent='100%';
+}
 
 /* ---------- layout: data raster follows the window's aspect ratio ---------- */
 function measure(){
@@ -217,6 +239,9 @@ $('prev').onclick=()=>{setPlay(false);idx=(idx-1+ready().length)%ready().length;
 $('next').onclick=()=>{setPlay(false);idx=(idx+1)%ready().length;show()};
 $('first').onclick=()=>{setPlay(false);idx=0;show()};
 $('last').onclick=()=>{setPlay(false);idx=ready().length-1;show()};
+$('zoomIn').onclick=()=>zoomBy(1.2, CW/2, CH/2);
+$('zoomOut').onclick=()=>zoomBy(1/1.2, CW/2, CH/2);
+$('zoomReset').onclick=()=>resetZoom();
 $('px').onchange=e=>{cell=+e.target.value;buildMaps();show()};
 $('sl').oninput=e=>{setPlay(false);idx=+e.target.value;show()};
 $('loadPal').onclick=()=>$('palFile').click();
@@ -238,18 +263,23 @@ $('palFile').onchange=async e=>{
 };
 addEventListener('keydown',e=>{if(e.code==='Space'){e.preventDefault();setPlay(!playing)}else if(e.key==='ArrowLeft')$('prev').click();else if(e.key==='ArrowRight')$('next').click()});
 /* live readout: lat/lon, dBZ and rain rate (Marshall-Palmer Z=200R^1.6) under the pointer */
-const ro=$('ro'),stage=$('stage'),HINT=ro.textContent;
+const ro=$('ro'),stage=$('stage'),mapLayer=$('mapLayer'),HINT=ro.textContent;
 const inv=(x,y)=>{const wx=x+OX,wy=y+OY;return[Math.atan(Math.sinh(Math.PI*(1-2*wy/W)))*180/Math.PI,wx/W*360-180]};
-stage.addEventListener('pointermove',e=>{const b=stage.getBoundingClientRect(),x=Math.floor((e.clientX-b.left)/(b.width||SW)*SW),y=Math.floor((e.clientY-b.top)/(b.height||SH)*SH);
+stage.addEventListener('pointerdown',e=>{if(viewZoom<=1)return;dragMode={startX:e.clientX,startY:e.clientY,startTranslateX:viewTranslateX,startTranslateY:viewTranslateY};stage.setPointerCapture(e.pointerId);stage.style.cursor='grabbing';});
+stage.addEventListener('pointermove',e=>{if(dragMode){viewTranslateX=dragMode.startTranslateX + (e.clientX-dragMode.startX);viewTranslateY=dragMode.startTranslateY + (e.clientY-dragMode.startY);applyZoomTransform();return;}const b=stage.getBoundingClientRect(),px=(e.clientX-b.left-viewTranslateX)/Math.max(1,viewZoom),py=(e.clientY-b.top-viewTranslateY)/Math.max(1,viewZoom),x=Math.floor((px/b.width)*SW),y=Math.floor((py/b.height)*SH);
   if(x<0||y<0||x>=SW||y>=SH)return;const[la,lo]=inv(x,y),f=ready()[idx];
   let s=`${Math.abs(la).toFixed(2)}°${la>=0?'N':'S'} ${Math.abs(lo).toFixed(2)}°${lo>=0?'E':'W'}`;
   if(f&&f.data){const v=f.data[y*SW+x];if(v){const d=v-32,R=Math.pow(Math.pow(10,d/10)/200,1/1.6);s+=` · ${d} dBZ · ${R<.1?'<0.1':R.toFixed(R<10?1:0)} mm/h`}else s+=' · no echo'}
   ro.textContent=s});
-stage.addEventListener('pointerleave',()=>ro.textContent=HINT);
+stage.addEventListener('pointerup',e=>{if(dragMode){dragMode=null;stage.releasePointerCapture?.(e.pointerId);stage.style.cursor='crosshair';}});
+stage.addEventListener('pointerleave',()=>{if(!dragMode){ro.textContent=HINT;} else {dragMode=null;stage.style.cursor='crosshair';}});
+stage.addEventListener('wheel',e=>{e.preventDefault();zoomBy(Math.exp(-e.deltaY*0.0015), e.clientX, e.clientY);},{passive:false});
 /* resize / rotate: redraw the overlay, and rebuild the raster if the window's shape changed */
 let rt;addEventListener('resize',()=>{clearTimeout(rt);rt=setTimeout(()=>{const d=measure();
   if(d[0]!==SW||d[1]!==SH){gen++;frames=[];idx=0;setup(d);refresh()}else{sizeRadar();ovc.width=Math.round(CW*DPR);ovc.height=Math.round(CH*DPR);drawOverlay();show()}},250)});
 setup(measure());
+applyZoomTransform();
+$('zoomReset').textContent='100%';
 (function loop(){refresh().then(ok=>{if(ok&&!timer&&playing)setPlay(true);if(!ok)fails++;setTimeout(loop,ok?120000:Math.min(60000,15000*Math.max(1,fails)))})})();
 setInterval(status,30000);
 addEventListener('online',()=>refresh());
