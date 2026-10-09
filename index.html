@@ -121,7 +121,8 @@ let SW=900,SH=900,OX=0,OY=0,CW=900,CH=900,DPR=1,img,px32,gen=0,cell=1,mapX,mapY;
 let host='',mode=null,frames=[],idx=0,playing=true,timer=null,lastOk=0,fails=0;
 const MIN_ZOOM=1, MAX_ZOOM=6, clamp=(v,min,max)=>Math.min(max,Math.max(min,v));
 let viewZoom=1, viewTranslateX=0, viewTranslateY=0;
-let dragMode=null;
+let dragMode=null, pinchState=null;
+const activePointers=new Map();
 const ready=()=>frames.filter(f=>f.gen===gen&&(f.data||f.canvas));
 function applyZoomTransform(){
   mapLayer.style.transform=`translate(${viewTranslateX}px, ${viewTranslateY}px) scale(${viewZoom})`;
@@ -265,14 +266,65 @@ addEventListener('keydown',e=>{if(e.code==='Space'){e.preventDefault();setPlay(!
 /* live readout: lat/lon, dBZ and rain rate (Marshall-Palmer Z=200R^1.6) under the pointer */
 const ro=$('ro'),stage=$('stage'),mapLayer=$('mapLayer'),HINT=ro.textContent;
 const inv=(x,y)=>{const wx=x+OX,wy=y+OY;return[Math.atan(Math.sinh(Math.PI*(1-2*wy/W)))*180/Math.PI,wx/W*360-180]};
-stage.addEventListener('pointerdown',e=>{if(viewZoom<=1)return;dragMode={startX:e.clientX,startY:e.clientY,startTranslateX:viewTranslateX,startTranslateY:viewTranslateY};stage.setPointerCapture(e.pointerId);stage.style.cursor='grabbing';});
-stage.addEventListener('pointermove',e=>{if(dragMode){viewTranslateX=dragMode.startTranslateX + (e.clientX-dragMode.startX);viewTranslateY=dragMode.startTranslateY + (e.clientY-dragMode.startY);applyZoomTransform();return;}const b=stage.getBoundingClientRect(),px=(e.clientX-b.left-viewTranslateX)/Math.max(1,viewZoom),py=(e.clientY-b.top-viewTranslateY)/Math.max(1,viewZoom),x=Math.floor((px/b.width)*SW),y=Math.floor((py/b.height)*SH);
+function getMidpoint(a,b){return{x:(a.x+b.x)/2,y:(a.y+b.y)/2};}
+function pointerToMapCoords(clientX,clientY){
+  const b=stage.getBoundingClientRect();
+  const px=(clientX-b.left-viewTranslateX)/Math.max(1,viewZoom),py=(clientY-b.top-viewTranslateY)/Math.max(1,viewZoom);
+  return {x:Math.floor((px/b.width)*SW),y:Math.floor((py/b.height)*SH)};
+}
+stage.addEventListener('pointerdown',e=>{
+  activePointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  if(activePointers.size===2){
+    const pts=[...activePointers.values()];
+    const center=getMidpoint(pts[0],pts[1]);
+    pinchState={
+      startZoom:viewZoom,
+      startTranslateX:viewTranslateX,
+      startTranslateY:viewTranslateY,
+      startDistance:Math.hypot(pts[0].x-pts[1].x,pts[0].y-pts[1].y),
+      centerX:center.x,
+      centerY:center.y
+    };
+    dragMode=null;
+    stage.style.cursor='grabbing';
+    return;
+  }
+  if(e.pointerType==='touch' || viewZoom>1){
+    dragMode={startX:e.clientX,startY:e.clientY,startTranslateX:viewTranslateX,startTranslateY:viewTranslateY};
+    stage.setPointerCapture(e.pointerId);
+    stage.style.cursor='grabbing';
+  }
+});
+stage.addEventListener('pointermove',e=>{
+  if(activePointers.has(e.pointerId)) activePointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  if(activePointers.size>=2 && pinchState){
+    const pts=[...activePointers.values()];
+    const center=getMidpoint(pts[0],pts[1]);
+    const dist=Math.hypot(pts[0].x-pts[1].x,pts[0].y-pts[1].y) || 1;
+    const nextZoom=clamp(pinchState.startZoom * (dist / pinchState.startDistance), MIN_ZOOM, MAX_ZOOM);
+    const localX=(center.x - pinchState.startTranslateX) / pinchState.startZoom;
+    const localY=(center.y - pinchState.startTranslateY) / pinchState.startZoom;
+    viewTranslateX=center.x - localX * nextZoom;
+    viewTranslateY=center.y - localY * nextZoom;
+    viewZoom=nextZoom;
+    applyZoomTransform();
+    $('zoomReset').textContent=`${Math.round(viewZoom*100)}%`;
+    return;
+  }
+  if(dragMode){
+    viewTranslateX=dragMode.startTranslateX + (e.clientX-dragMode.startX);
+    viewTranslateY=dragMode.startTranslateY + (e.clientY-dragMode.startY);
+    applyZoomTransform();
+    return;
+  }
+  const b=stage.getBoundingClientRect(),px=(e.clientX-b.left-viewTranslateX)/Math.max(1,viewZoom),py=(e.clientY-b.top-viewTranslateY)/Math.max(1,viewZoom),x=Math.floor((px/b.width)*SW),y=Math.floor((py/b.height)*SH);
   if(x<0||y<0||x>=SW||y>=SH)return;const[la,lo]=inv(x,y),f=ready()[idx];
   let s=`${Math.abs(la).toFixed(2)}°${la>=0?'N':'S'} ${Math.abs(lo).toFixed(2)}°${lo>=0?'E':'W'}`;
   if(f&&f.data){const v=f.data[y*SW+x];if(v){const d=v-32,R=Math.pow(Math.pow(10,d/10)/200,1/1.6);s+=` · ${d} dBZ · ${R<.1?'<0.1':R.toFixed(R<10?1:0)} mm/h`}else s+=' · no echo'}
   ro.textContent=s});
-stage.addEventListener('pointerup',e=>{if(dragMode){dragMode=null;stage.releasePointerCapture?.(e.pointerId);stage.style.cursor='crosshair';}});
-stage.addEventListener('pointerleave',()=>{if(!dragMode){ro.textContent=HINT;} else {dragMode=null;stage.style.cursor='crosshair';}});
+stage.addEventListener('pointerup',e=>{activePointers.delete(e.pointerId);if(activePointers.size<2)pinchState=null;if(dragMode){dragMode=null;stage.releasePointerCapture?.(e.pointerId);stage.style.cursor='crosshair';}if(activePointers.size===0){stage.style.cursor='crosshair';}});
+stage.addEventListener('pointercancel',e=>{activePointers.delete(e.pointerId);pinchState=null;dragMode=null;stage.style.cursor='crosshair';});
+stage.addEventListener('pointerleave',()=>{if(!dragMode&&!pinchState){ro.textContent=HINT;} else {dragMode=null;pinchState=null;stage.style.cursor='crosshair';}});
 stage.addEventListener('wheel',e=>{e.preventDefault();zoomBy(Math.exp(-e.deltaY*0.0015), e.clientX, e.clientY);},{passive:false});
 /* resize / rotate: redraw the overlay, and rebuild the raster if the window's shape changed */
 let rt;addEventListener('resize',()=>{clearTimeout(rt);rt=setTimeout(()=>{const d=measure();
