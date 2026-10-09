@@ -13,21 +13,24 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
 #wrap{font:11px Tahoma,"MS Sans Serif",Verdana,sans-serif;color:#000}
 #ctl,#meta{display:flex;gap:4px;align-items:center;padding:4px;background:#c0c0c0;border:2px solid;border-color:#fff #404040 #404040 #fff;box-shadow:inset -1px -1px #808080,inset 1px 1px #dfdfdf;margin-top:2px}
 #meta{gap:2px;padding:2px 2px calc(2px + env(safe-area-inset-bottom,0px));margin-top:0;border-top:0}
+#ctl{flex-wrap:wrap;row-gap:6px;max-width:100%}
+#ctl > *{min-width:0}
 #ctl button,#ctl select{font:inherit;color:#000;background:#c0c0c0;border:2px solid;border-color:#fff #404040 #404040 #fff;box-shadow:inset -1px -1px #808080,inset 1px 1px #dfdfdf;border-radius:0;padding:3px 8px;min-width:30px;cursor:default;appearance:none;-webkit-appearance:none}
 #ctl button.active{background:#f7d7ae;border-color:#fff #404040 #404040 #fff}
 #ctl select{padding:3px 4px;min-width:0}
 #ctl button:active{border-color:#404040 #fff #fff #404040;box-shadow:inset 1px 1px #808080;padding:4px 7px 2px 9px}
 #ctl button:focus-visible,#ctl select:focus-visible{outline:1px dotted #000;outline-offset:-5px}
-#sl{-webkit-appearance:none;appearance:none;flex:1;min-width:60px;height:21px;background:transparent;margin:0 4px}
+#sl{-webkit-appearance:none;appearance:none;flex:1 1 140px;min-width:80px;max-width:100%;height:21px;background:transparent;margin:0 4px}
 #sl::-webkit-slider-runnable-track{height:4px;background:#c0c0c0;border:1px solid;border-color:#808080 #fff #fff #808080;box-shadow:inset 1px 1px #404040}
 #sl::-webkit-slider-thumb{-webkit-appearance:none;width:11px;height:21px;margin-top:-9px;background:#c0c0c0;border:2px solid;border-color:#fff #404040 #404040 #fff;box-shadow:inset -1px -1px #808080,inset 1px 1px #dfdfdf;border-radius:0}
 #sl::-moz-range-track{height:2px;background:#c0c0c0;border:1px solid;border-color:#808080 #fff #fff #808080}
 #sl::-moz-range-thumb{width:7px;height:17px;background:#c0c0c0;border:2px solid;border-color:#fff #404040 #404040 #fff;box-shadow:inset -1px -1px #808080,inset 1px 1px #dfdfdf;border-radius:0}
 #st,#ro,.cell{border:1px solid;border-color:#808080 #fff #fff #808080;padding:2px 6px;background:#c0c0c0;color:#000;white-space:nowrap;overflow:hidden}
-#st{min-width:14em}#st.err{color:#c00}#ro{flex:1}
+#st{min-width:14em;max-width:100%}#st.err{color:#c00}#ro{flex:1;min-width:0}
 #meta a{color:#00e}
 
-@media(max-width:560px){#ctl{flex-wrap:wrap}#sl{order:9;flex:1 1 100%;margin:2px 4px}#st{min-width:0;flex:1}#meta{flex-wrap:wrap}}
+@media (max-width:720px){#ctl{display:grid;grid-template-columns:repeat(auto-fit,minmax(42px,1fr));align-items:center}#sl{order:99;grid-column:1/-1;min-width:0;width:100%;margin:2px 0}#st{grid-column:1/-1;min-width:0}#ro,#meta{min-width:0}#meta{flex-wrap:wrap}}
+@media (orientation:landscape) and (max-height:420px){#ctl{padding:2px 4px;row-gap:3px}#ctl button,#ctl select{padding:2px 6px;font-size:10px}#st{min-width:0}#sl{min-width:90px}}
 </style>
 
 <link rel="icon" type="image/png" href="UKRR.png">
