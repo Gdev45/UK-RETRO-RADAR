@@ -41,6 +41,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
 <div id="stage"><div id="mapLayer"><canvas id="radar" width="900" height="900"></canvas><canvas id="ov" width="900" height="900"></canvas><div id="title">LOADING RADAR…</div></div></div>
 <div id="ctl"><button id="first" title="Oldest">|◄</button><button id="prev" title="Back">◄</button><button id="play" title="Play / pause">❚❚</button><button id="next" title="Forward">►</button><button id="last" title="Latest">►|</button>
 <button id="zoomOut" title="Zoom out">−</button><button id="zoomIn" title="Zoom in">＋</button><button id="zoomReset" title="Reset zoom">100%</button>
+<button id="lightningToggle" title="Hide radar and show lightning only">Lightning</button>
 <input id="sl" type="range" min="0" max="0" value="0"><select id="px" title="Size of each hard-edged radar block"><option value="1" selected>Pixel 1x</option><option value="2">Pixel 2x</option><option value="3">Pixel 3x</option><option value="4">Pixel 4x</option></select><select id="spd"><option value="900">Slow</option><option value="500" selected>Normal</option><option value="250">Fast</option></select><input id="palFile" type="file" accept=".pal,.txt" hidden><button id="loadPal" title="Load custom .pal colour table">Load .pal</button><button id="resetPal" title="Reset to default colour table">Default</button><span id="st">…</span></div>
 <div id="meta"><span id="ro">Hover or touch the map for live dBZ / rain rate</span><span class="cell">Weather data by <a href="https://www.rainviewer.com" target="_blank" rel="noopener">Rain Viewer</a></span></div>
 </div>
@@ -119,16 +120,83 @@ function dbz(r,g,b,a){
   const k=r<<16|g<<8|b;let v=memo.get(k);
   if(v===undefined){let bd=1e9;for(const e of ENT){const d=(e[0]-r)**2+(e[1]-g)**2+(e[2]-b)**2;if(d<bd){bd=d;v=e[3]}}memo.set(k,v)}
   return v}
-const $=id=>document.getElementById(id),rc=$('radar').getContext('2d'),ovc=$('ov'),ov=ovc.getContext('2d');
+const $=id=>document.getElementById(id),radarCanvas=$('radar'),rc=radarCanvas.getContext('2d'),ovc=$('ov'),ov=ovc.getContext('2d');
 let SW=900,SH=900,OX=0,OY=0,CW=900,CH=900,DPR=1,img,px32,gen=0,cell=1,mapX,mapY;
 let host='',mode=null,frames=[],idx=0,playing=true,timer=null,lastOk=0,fails=0;
+let lightning=[]; let lightningSeq=0; let lightningRefreshTimer=null;
+let lightningOnly=false;
 const MIN_ZOOM=1, MAX_ZOOM=6, clamp=(v,min,max)=>Math.min(max,Math.max(min,v));
 let viewZoom=1, viewTranslateX=0, viewTranslateY=0;
 let dragMode=null, pinchState=null;
 const activePointers=new Map();
 const ready=()=>frames.filter(f=>f.gen===gen&&(f.data||f.canvas));
+const LIGHTNING_WINDOW_SECONDS=60*60;
+function ageToColor(ageSeconds){
+  const age=Math.min(LIGHTNING_WINDOW_SECONDS,Math.max(0,ageSeconds));
+  const t=age/LIGHTNING_WINDOW_SECONDS;
+  const hue=120*(1-t); // green -> yellow -> orange -> red -> dark purple
+  const lightness=70 - t*42;
+  const alpha=0.15 + (1-t)*0.8;
+  return `hsla(${hue}, 100%, ${lightness}%, ${alpha})`;
+}
+function drawLightning(){
+  if(!lightning.length)return;
+  const now=Date.now()/1000;
+  const u=DPR;
+  const P=(la,lo)=>{const[x,y]=proj(la,lo);return[x*u,y*u]};
+  ov.save();
+  for(const strike of lightning){
+    const age=now - (strike.ts || now);
+    if(age>LIGHTNING_WINDOW_SECONDS || age<0) continue;
+    const [x,y]=P(strike.la,strike.lo);
+    const radius=1.8 + (1 - Math.min(age,LIGHTNING_WINDOW_SECONDS)/LIGHTNING_WINDOW_SECONDS) * 4.4;
+    ov.beginPath();
+    ov.fillStyle=ageToColor(age);
+    ov.arc(x,y,radius*u,0,Math.PI*2);
+    ov.fill();
+  }
+  ov.restore();
+}
+async function refreshLightning(){
+  const url=`https://live.lightningmaps.org/l/?v=24&l=${lightningSeq}&i=0`;
+  try{
+    const res=await fetch(url,{cache:'no-store'});
+    if(!res.ok)return;
+    const data=await res.json();
+    const now=Date.now()/1000;
+    const kept=lightning.filter(s => (now - (s.ts || now)) <= LIGHTNING_WINDOW_SECONDS);
+    if(!data||!Array.isArray(data.d)){
+      lightning=kept.slice(-2000);
+      if(typeof data?.s==='number') lightningSeq=data.s;
+      return;
+    }
+    const list=[];
+    for(const d of data.d){
+      const la=Number(d.lat ?? d.latitude ?? d.y);
+      const lo=Number(d.lon ?? d.longitude ?? d.x);
+      const ts=Number(d.t ?? d.time ?? d.timestamp ?? d.ts ?? d.ms ?? d.when);
+      if(!Number.isFinite(la)||!Number.isFinite(lo)||!Number.isFinite(ts)) continue;
+      const seconds=ts>1e12?ts/1000:ts;
+      const age=now-seconds;
+      if(age<0 || age>LIGHTNING_WINDOW_SECONDS) continue;
+      list.push({la,lo,ts:seconds,age});
+    }
+    lightning=[...kept, ...list].slice(-2000);
+    if(typeof data.s==='number') lightningSeq=data.s;
+  }catch(err){
+    console.warn('Lightning feed unavailable',err);
+  }
+}
 function applyZoomTransform(){
   mapLayer.style.transform=`translate(${viewTranslateX}px, ${viewTranslateY}px) scale(${viewZoom})`;
+}
+function applyLightningView(){
+  radarCanvas.style.opacity = lightningOnly ? '0' : '1';
+  radarCanvas.style.pointerEvents = 'none';
+  radarCanvas.style.transition = 'opacity 0.15s ease';
+  ovc.style.opacity = '1';
+  $('lightningToggle').classList.toggle('active', lightningOnly);
+  $('lightningToggle').textContent = lightningOnly ? 'Radar' : 'Lightning';
 }
 function zoomBy(factor,clientX,clientY){
   const rect=stage.getBoundingClientRect();
@@ -187,6 +255,7 @@ function drawOverlay(){
   const step=H<320*u?20:10;for(let d=80;d>=-30;d-=step)ov.fillText(String(d),bx-5*u,yOf(d)+4*u);
   ov.fillStyle='#fff';ov.textAlign='right';ov.fillText('UKRR',w-8*u,40*u);ov.fillText('[dBZ]',w-8*u,52*u);
   ov.fillStyle='#ddd';ov.fillText('UK RAINFALL RADAR',w-8*u,14*u);
+  drawLightning();
 }
 
 /* ---------- radar frames ---------- */
@@ -246,6 +315,7 @@ $('last').onclick=()=>{setPlay(false);idx=ready().length-1;show()};
 $('zoomIn').onclick=()=>zoomBy(1.2, CW/2, CH/2);
 $('zoomOut').onclick=()=>zoomBy(1/1.2, CW/2, CH/2);
 $('zoomReset').onclick=()=>resetZoom();
+$('lightningToggle').onclick=()=>{lightningOnly=!lightningOnly;applyLightningView();};
 $('px').onchange=e=>{cell=+e.target.value;buildMaps();show()};
 $('sl').oninput=e=>{setPlay(false);idx=+e.target.value;show()};
 $('loadPal').onclick=()=>$('palFile').click();
@@ -335,8 +405,11 @@ let rt;addEventListener('resize',()=>{clearTimeout(rt);rt=setTimeout(()=>{const 
 setup(measure());
 applyZoomTransform();
 $('zoomReset').textContent='100%';
+applyLightningView();
+refreshLightning();
+lightningRefreshTimer=setInterval(refreshLightning,15000);
 (function loop(){refresh().then(ok=>{if(ok&&!timer&&playing)setPlay(true);if(!ok)fails++;setTimeout(loop,ok?120000:Math.min(60000,15000*Math.max(1,fails)))})})();
 setInterval(status,30000);
-addEventListener('online',()=>refresh());
+addEventListener('online',()=>refreshLightning());
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&Date.now()-lastOk>120000)refresh()});
 </script></body></html>
