@@ -8,9 +8,10 @@ html,body{margin:0;height:100%;overflow:hidden;background:#000;color:#ccc;font:1
 #stage{flex:1;min-height:0;position:relative;background:#000;container-type:inline-size;overflow:hidden;touch-action:none;cursor:crosshair;z-index:0}
 #mapLayer{position:absolute;inset:0;transform-origin:0 0;will-change:transform;z-index:0}
 canvas{position:absolute;inset:0;width:100%;height:100%}
-#radar{z-index:1;image-rendering:crisp-edges;image-rendering:pixelated}
-#ov{z-index:2}
-#title{position:absolute;left:0;right:0;bottom:0;text-align:center;color:#fff;font-size:clamp(9px,1.45cqw,13px);line-height:1.25;background:#000;padding:3px 4px;z-index:3}
+#ov{z-index:1}
+#radar{z-index:2;image-rendering:crisp-edges;image-rendering:pixelated}
+#legend{z-index:3;pointer-events:none}
+#title{position:absolute;left:0;right:0;bottom:0;text-align:center;color:#fff;font-size:clamp(9px,1.45cqw,13px);line-height:1.25;background:#000;padding:3px 4px;z-index:4}
 #wrap{font:11px Tahoma,"MS Sans Serif",Verdana,sans-serif;color:#000}
 #ctl,#meta{display:flex;gap:4px;align-items:center;padding:4px;background:#c0c0c0;border:2px solid;border-color:#fff #404040 #404040 #fff;box-shadow:inset -1px -1px #808080,inset 1px 1px #dfdfdf;margin-top:2px}
 #meta{gap:2px;padding:2px 2px calc(2px + env(safe-area-inset-bottom,0px));margin-top:0;border-top:0}
@@ -39,7 +40,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
 
 </head><body>
 <div id="wrap">
-<div id="stage"><div id="mapLayer"><canvas id="radar" width="900" height="900"></canvas><canvas id="ov" width="900" height="900"></canvas><div id="title">LOADING RADAR…</div></div></div>
+<div id="stage"><div id="mapLayer"><canvas id="radar" width="900" height="900"></canvas><canvas id="ov" width="900" height="900"></canvas><canvas id="legend" width="900" height="900"></canvas><div id="title">LOADING RADAR…</div></div></div>
 <div id="ctl"><button id="first" title="Oldest">|◄</button><button id="prev" title="Back">◄</button><button id="play" title="Play / pause">❚❚</button><button id="next" title="Forward">►</button><button id="last" title="Latest">►|</button>
 <button id="zoomOut" title="Zoom out">−</button><button id="zoomIn" title="Zoom in">＋</button><button id="zoomReset" title="Reset zoom">100%</button>
 <button id="lightningToggle" title="Hide radar and show lightning only">Lightning</button>
@@ -121,7 +122,7 @@ function dbz(r,g,b,a){
   const k=r<<16|g<<8|b;let v=memo.get(k);
   if(v===undefined){let bd=1e9;for(const e of ENT){const d=(e[0]-r)**2+(e[1]-g)**2+(e[2]-b)**2;if(d<bd){bd=d;v=e[3]}}memo.set(k,v)}
   return v}
-const $=id=>document.getElementById(id),radarCanvas=$('radar'),rc=radarCanvas.getContext('2d'),ovc=$('ov'),ov=ovc.getContext('2d');
+const $=id=>document.getElementById(id),radarCanvas=$('radar'),rc=radarCanvas.getContext('2d'),ovc=$('ov'),ov=ovc.getContext('2d'),legendCanvas=$('legend'),lc=legendCanvas.getContext('2d');
 let SW=900,SH=900,OX=0,OY=0,CW=900,CH=900,DPR=1,img,px32,gen=0,cell=1,mapX,mapY;
 let host='',mode=null,frames=[],idx=0,playing=true,timer=null,lastOk=0,fails=0;
 let lightning=[]; let lightningSeq=0; let lightningRefreshTimer=null;
@@ -222,7 +223,7 @@ function measure(){
 function setup(dims){
   [SW,SH]=dims;const sc=Math.sin(C[0]*Math.PI/180),mx=(C[1]+180)/360*W,my=(.5-Math.log((1+sc)/(1-sc))/(4*Math.PI))*W;
   OX=Math.round(mx)-SW/2;OY=Math.round(my)-SH/2;
-  sizeRadar();ovc.width=Math.round(CW*DPR);ovc.height=Math.round(CH*DPR);drawOverlay()}
+  sizeRadar();ovc.width=Math.round(CW*DPR);ovc.height=Math.round(CH*DPR);legendCanvas.width=Math.round(CW*DPR);legendCanvas.height=Math.round(CH*DPR);drawOverlay();drawLegend();}
 /* The radar canvas is drawn at true screen resolution: every screen pixel picks ONE data cell (nearest
    neighbour, no browser scaling, no blending). `cell` = size of each hard-edged block in data pixels. */
 function sizeRadar(){
@@ -247,16 +248,19 @@ function drawOverlay(){
   ov.font=(small?9:11)*u+'px "Courier New",monospace';ov.textAlign='left';
   for(const[n,la,lo]of[['London',51.51,-.13],['Birmingham',52.48,-1.9],['Manchester',53.48,-2.24],['Leeds',53.8,-1.55],['Newcastle',54.98,-1.62],['Glasgow',55.86,-4.25],['Edinburgh',55.95,-3.19],['Aberdeen',57.15,-2.09],['Inverness',57.48,-4.22],['Cardiff',51.48,-3.18],['Belfast',54.6,-5.93],['Dublin',53.35,-6.26],['Plymouth',50.37,-4.14],['Norwich',52.63,1.3],['Lerwick',60.15,-1.15],['Stornoway',58.21,-6.39]]){
     const[x,y]=P(la,lo);ov.fillStyle='#ff0';ov.fillRect(x-1.5*u,y-1.5*u,3*u,3*u);ov.fillStyle='#fff';ov.shadowColor='#000';ov.shadowBlur=3*u;ov.fillText(n,x+4*u,y+3.5*u);ov.shadowBlur=0}
-  // colour bar, right edge
-  const bw=(small?14:20)*u,bx=w-bw-8*u,top=64*u,bot=h-Math.max(34,small?40:30)*u,H=bot-top,yOf=d=>top+(90-d)/125*H;
-  ov.save();ov.beginPath();ov.rect(bx,top,bw,H);ov.clip();ov.fillStyle='#000';ov.fillRect(bx,top,bw,H);
-  PAL.forEach(([p,c],i)=>{const hi=yOf(i<PAL.length-1?PAL[i+1][0]:95);ov.fillStyle='#'+c;ov.fillRect(bx,hi,bw,yOf(p)-hi+.5)});ov.restore();
-  ov.strokeStyle='#fff';ov.lineWidth=1.5*u;ov.strokeRect(bx-.75*u,top-.75*u,bw+1.5*u,H+1.5*u);
-  ov.font=(small?10:12)*u+'px "Courier New",monospace';ov.textAlign='right';ov.fillStyle='#ff0';
-  const step=H<320*u?20:10;for(let d=80;d>=-30;d-=step)ov.fillText(String(d),bx-5*u,yOf(d)+4*u);
-  ov.fillStyle='#fff';ov.textAlign='right';ov.fillText('UKRR',w-8*u,40*u);ov.fillText('[dBZ]',w-8*u,52*u);
-  ov.fillStyle='#ddd';ov.fillText('UK RAINFALL RADAR',w-8*u,14*u);
   drawLightning();
+}
+function drawLegend(){
+  const w=legendCanvas.width,h=legendCanvas.height,small=CW<520,u=DPR;
+  lc.setTransform(1,0,0,1,0,0);lc.clearRect(0,0,w,h);
+  const bw=(small?14:20)*u,bx=w-bw-8*u,top=64*u,bot=h-Math.max(34,small?40:30)*u,H=bot-top,yOf=d=>top+(90-d)/125*H;
+  lc.save();lc.beginPath();lc.rect(bx,top,bw,H);lc.clip();lc.fillStyle='#000';lc.fillRect(bx,top,bw,H);
+  PAL.forEach(([p,c],i)=>{const hi=yOf(i<PAL.length-1?PAL[i+1][0]:95);lc.fillStyle='#'+c;lc.fillRect(bx,hi,bw,yOf(p)-hi+.5)});lc.restore();
+  lc.strokeStyle='#fff';lc.lineWidth=1.5*u;lc.strokeRect(bx-.75*u,top-.75*u,bw+1.5*u,H+1.5*u);
+  lc.font=(small?10:12)*u+'px "Courier New",monospace';lc.textAlign='right';lc.fillStyle='#ff0';
+  const step=H<320*u?20:10;for(let d=80;d>=-30;d-=step)lc.fillText(String(d),bx-5*u,yOf(d)+4*u);
+  lc.fillStyle='#fff';lc.textAlign='right';lc.fillText('UKRR',w-8*u,40*u);lc.fillText('[dBZ]',w-8*u,52*u);
+  lc.fillStyle='#ddd';lc.fillText('UK RAINFALL RADAR',w-8*u,14*u);
 }
 
 /* ---------- radar frames ---------- */
@@ -323,7 +327,7 @@ $('loadPal').onclick=()=>$('palFile').click();
 function applyPalette(nextPal, message){
   PAL=[...nextPal];
   LUT=buildLutFromPalette(PAL);
-  drawOverlay();
+  drawLegend();
   show();
   if(message) $('ro').textContent=message;
 }
@@ -406,7 +410,7 @@ stage.addEventListener('pointerleave',()=>{if(!dragMode&&!pinchState){ro.textCon
 stage.addEventListener('wheel',e=>{e.preventDefault();zoomBy(Math.exp(-e.deltaY*0.0015), e.clientX, e.clientY);},{passive:false});
 /* resize / rotate: redraw the overlay, and rebuild the raster if the window's shape changed */
 let rt;addEventListener('resize',()=>{clearTimeout(rt);rt=setTimeout(()=>{const d=measure();
-  if(d[0]!==SW||d[1]!==SH){gen++;frames=[];idx=0;setup(d);refresh()}else{sizeRadar();ovc.width=Math.round(CW*DPR);ovc.height=Math.round(CH*DPR);drawOverlay();show()}},250)});
+  if(d[0]!==SW||d[1]!==SH){gen++;frames=[];idx=0;setup(d);refresh()}else{sizeRadar();ovc.width=Math.round(CW*DPR);ovc.height=Math.round(CH*DPR);legendCanvas.width=Math.round(CW*DPR);legendCanvas.height=Math.round(CH*DPR);drawOverlay();drawLegend();show()}},250)});
 setup(measure());
 applyZoomTransform();
 $('zoomReset').textContent='100%';
